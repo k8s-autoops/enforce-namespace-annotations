@@ -3,8 +3,8 @@ ENV GOPROXY https://goproxy.io
 ENV CGO_ENABLED 0
 WORKDIR /go/src/app
 ADD . .
-RUN go build -o /enforce-qcloud-fixed-ip
+RUN go build -o /enforce-ns-annotations
 
 FROM alpine:3.12
-COPY --from=builder /enforce-qcloud-fixed-ip /enforce-qcloud-fixed-ip
-CMD ["/enforce-qcloud-fixed-ip"]
+COPY --from=builder /enforce-ns-annotations /enforce-ns-annotations
+CMD ["/enforce-ns-annotations"]

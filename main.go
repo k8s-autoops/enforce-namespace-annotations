@@ -9,27 +9,16 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
 type M map[string]interface{}
 
-type StatefulSet struct {
-	Spec struct {
-		Template struct {
-			Metadata struct {
-				Annotations *M `json:"annotations"`
-			} `json:"metadata"`
-			Spec struct {
-				Containers []struct {
-					Resources *struct {
-						Limits   *M `json:"limits"`
-						Requests *M `json:"requests"`
-					} `json:"resources"`
-				} `json:"containers"`
-			} `json:"spec"`
-		} `json:"template"`
-	} `json:"spec"`
+type Namespace struct {
+	Metadata struct {
+		Annotations *M `json:"annotations"`
+	} `json:"metadata"`
 }
 
 const (
@@ -53,6 +42,20 @@ func main() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stdout)
 
+	annotations := map[string]string{}
+	annotationRaws := strings.Split(strings.TrimSpace(os.Getenv("CFG_ANNOTATIONS")), ",")
+	for _, annotationRaw := range annotationRaws {
+		kv := strings.SplitN(strings.TrimSpace(annotationRaw), ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		k, v := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+		if k == "" {
+			continue
+		}
+		annotations[k] = v
+	}
+
 	s := &http.Server{
 		Addr: ":443",
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -70,14 +73,14 @@ func main() {
 
 			// patches
 			var buf []byte
-			var sts StatefulSet
+			var ns Namespace
 
 			if buf, err = review.Request.Object.MarshalJSON(); err != nil {
 				log.Println("Failed to marshal object to json:", err.Error())
 				http.Error(rw, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err = json.Unmarshal(buf, &sts); err != nil {
+			if err = json.Unmarshal(buf, &ns); err != nil {
 				log.Println("Failed to unmarshal object to statefulset:", err.Error())
 				http.Error(rw, err.Error(), http.StatusBadRequest)
 				return
@@ -85,55 +88,22 @@ func main() {
 
 			// build patches
 			var patches []M
-			if sts.Spec.Template.Metadata.Annotations == nil {
+			if ns.Metadata.Annotations == nil {
 				patches = append(patches, M{
 					"op":    "replace",
-					"path":  "/spec/template/metadata/annotations",
+					"path":  "/metadata/annotations",
 					"value": M{},
 				})
 			}
-			patches = append(patches, M{
-				"op":    "replace",
-				"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1networks",
-				"value": "tke-route-eni",
-			})
-			patches = append(patches, M{
-				"op":    "replace",
-				"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1vpc-ip-claim-delete-policy",
-				"value": "Never",
-			})
-			c := sts.Spec.Template.Spec.Containers[0]
-			if c.Resources == nil {
+
+			for k, v := range annotations {
+				pk := strings.ReplaceAll(strings.ReplaceAll(k, "~", "~0"), "/", "~1")
 				patches = append(patches, M{
 					"op":    "replace",
-					"path":  "/spec/template/spec/containers/0/resources",
-					"value": M{},
+					"path":  "/metadata/annotations/" + pk,
+					"value": v,
 				})
 			}
-			if c.Resources == nil || c.Resources.Limits == nil {
-				patches = append(patches, M{
-					"op":    "replace",
-					"path":  "/spec/template/spec/containers/0/resources/limits",
-					"value": M{},
-				})
-			}
-			if c.Resources == nil || c.Resources.Requests == nil {
-				patches = append(patches, M{
-					"op":    "replace",
-					"path":  "/spec/template/spec/containers/0/resources/requests",
-					"value": M{},
-				})
-			}
-			patches = append(patches, M{
-				"op":    "replace",
-				"path":  "/spec/template/spec/containers/0/resources/limits/tke.cloud.tencent.com~1eni-ip",
-				"value": "1",
-			})
-			patches = append(patches, M{
-				"op":    "replace",
-				"path":  "/spec/template/spec/containers/0/resources/requests/tke.cloud.tencent.com~1eni-ip",
-				"value": "1",
-			})
 
 			// build response
 			var patchJSON []byte
